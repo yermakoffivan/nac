@@ -56,6 +56,7 @@ import {
   useCreateModelConfig,
   useCreateSession,
   useModelCatalog,
+  useSandboxAvailability,
   useStoreInfo,
   useUpdatePresentation,
 } from "@/app/services/queries";
@@ -189,6 +190,9 @@ function LaunchForm({
 
   const isMobile = useIsMobile();
   const isSsh = mode === "ssh";
+  // Probed only while sandbox mode is selected, so a missing or stopped
+  // podman runtime is flagged here instead of failing the launch.
+  const sandboxAvailability = useSandboxAvailability(mode === "sandbox").data;
   const connected = isSsh ? connection : null;
   // A local or sandboxed session has nothing to connect to, so it is ready at once.
   const ready = !isSsh || connected !== null;
@@ -519,6 +523,22 @@ function LaunchForm({
           <p className="pt-1 text-micro text-basic-muted">
             {MODES.find((item) => item.id === mode)?.description}
           </p>
+          {mode === "sandbox" &&
+          sandboxAvailability &&
+          sandboxAvailability.status !== "ready" ? (
+            <div className="pt-1">
+              <p className="text-error-primary text-micro">
+                {sandboxAvailability.status === "missing"
+                  ? "Sandbox mode runs sessions in a podman container, and podman is not installed on this machine."
+                  : `Sandbox mode needs podman, which is not responding${sandboxAvailability.detail ? `: ${sandboxAvailability.detail}` : "."}`}
+              </p>
+              {sandboxAvailability.guidance ? (
+                <pre className="pt-1 whitespace-pre-wrap font-mono text-micro text-basic-muted">
+                  {sandboxAvailability.guidance}
+                </pre>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         {isSsh ? (

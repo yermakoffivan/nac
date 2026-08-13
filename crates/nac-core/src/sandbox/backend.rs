@@ -269,6 +269,7 @@ mod tests {
             shm_size: None,
             cpus: 2,
             memory_mib: 2048,
+            worktree: None,
         })
     }
 

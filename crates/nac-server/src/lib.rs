@@ -1969,6 +1969,15 @@ impl SessionManager {
         if let Some(service) = service {
             // Explicitly destroy the sandbox even if SSE handlers retain the service.
             service.destroy_sandbox().await;
+        } else {
+            // No live service (the server restarted since the session ran):
+            // the container is already ownerless, but the persisted spec
+            // still holds the worktree metadata needed to remove the fork.
+            if let Ok(snapshot) = sessions::load_session(&self.inner.store_path, session_id) {
+                if let Some(worktree) = snapshot.sandbox_spec.and_then(|spec| spec.worktree) {
+                    runtime::cleanup_session_worktree(&worktree);
+                }
+            }
         }
 
         // The revision rows cascade with the session, but the git objects they
@@ -2378,6 +2387,7 @@ fn api_router(manager: SessionManager) -> (Router, utoipa::openapi::OpenApi) {
     let documented = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(health))
         .routes(routes!(store_info))
+        .routes(routes!(sandbox_availability_handler))
         .routes(routes!(browse_filesystem_handler))
         .routes(routes!(browse_ssh_handler))
         .routes(routes!(provider_models_handler))
@@ -2560,6 +2570,20 @@ async fn serve_asset(AxumPath(path): AxumPath<String>) -> Response {
 )]
 async fn store_info(State(manager): State<SessionManager>) -> Json<StoreInfo> {
     Json(manager.store_info())
+}
+
+/// Whether this host can run sandboxed sessions right now. The launch UI
+/// queries this only when the user picks sandbox mode, so the probe's
+/// subprocess cost is paid on demand rather than on every page load.
+#[utoipa::path(
+    get,
+    path = "/sandbox/availability",
+    operation_id = "get_sandbox_availability",
+    tag = "system",
+    responses((status = 200, description = "Success", body = runtime::SandboxAvailability, content_type = "application/json"))
+)]
+async fn sandbox_availability_handler() -> Json<runtime::SandboxAvailability> {
+    Json(runtime::probe_availability().await)
 }
 
 /// The picker starts wherever the caller last was; with no path yet it opens on
@@ -4668,6 +4692,7 @@ mod tests {
         ("GET", "/mcp_library/servers"),
         ("GET", "/model-configs"),
         ("GET", "/models"),
+        ("GET", "/sandbox/availability"),
         ("GET", "/sessions"),
         ("GET", "/sessions/{session_id}"),
         ("GET", "/sessions/{session_id}/config"),

@@ -120,6 +120,7 @@ mod tests {
             shm_size: Some("0".to_string()),
             cpus: 2,
             memory_mib: 2048,
+            worktree: None,
         });
         let mut runtime = test_runtime();
         runtime.workspace_cwd = host_cwd.clone();
@@ -343,6 +344,7 @@ mod tests {
             shm_size: Some("0".to_string()),
             cpus: 2,
             memory_mib: 2048,
+            worktree: None,
         });
         let mut runtime = test_runtime();
         runtime.workspace_cwd = dir.clone();

@@ -2139,6 +2139,7 @@ mod tests {
             shm_size: Some("0".to_string()),
             cpus: 2,
             memory_mib: 2048,
+            worktree: None,
         });
         let mut runtime = crate::tools::test_runtime();
         runtime.workspace_cwd = workspace.clone();

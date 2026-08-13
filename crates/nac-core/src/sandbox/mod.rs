@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 mod backend;
 mod podman;
+pub(crate) mod session_worktree;
 mod ssh;
 mod ssh_browse;
 pub(crate) mod ssh_command;
@@ -21,6 +22,61 @@ pub use ssh_command::SshConnection;
 
 pub const DEFAULT_SANDBOX_IMAGE: &str = "python:3.13-bookworm";
 pub const DEFAULT_SANDBOX_WORKDIR: &str = "/workspace";
+
+/// Whether the sandbox runtime (podman) can be used on this host right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxAvailabilityStatus {
+    Ready,
+    /// The `podman` binary was not found.
+    Missing,
+    /// Installed but not answering: on macOS usually a stopped or missing
+    /// `podman machine`.
+    Unavailable,
+}
+
+/// The result of probing the sandbox runtime, with the steps that would make
+/// it usable. Surfaced by the API so launch UIs can warn before a session
+/// fails, and embedded in session-creation errors for agents driving the MCP.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SandboxAvailability {
+    pub status: SandboxAvailabilityStatus,
+    /// Why the runtime is unusable, when it is.
+    pub detail: Option<String>,
+    /// Platform-specific commands that would make it usable.
+    pub guidance: Option<String>,
+}
+
+impl SandboxAvailability {
+    pub fn available(&self) -> bool {
+        self.status == SandboxAvailabilityStatus::Ready
+    }
+
+    /// The availability problem as a single human-readable sentence, guidance
+    /// included. This is what session creation errors carry.
+    pub fn message(&self) -> String {
+        let problem = match self.status {
+            SandboxAvailabilityStatus::Ready => return "sandbox runtime is available".to_string(),
+            SandboxAvailabilityStatus::Missing => "podman is not installed".to_string(),
+            SandboxAvailabilityStatus::Unavailable => match &self.detail {
+                Some(detail) => format!("podman is installed but not responding ({detail})"),
+                None => "podman is installed but not responding".to_string(),
+            },
+        };
+        match &self.guidance {
+            Some(guidance) => format!("sandbox requested but {problem}. To fix:\n{guidance}"),
+            None => format!("sandbox requested but {problem}"),
+        }
+    }
+}
+
+/// Probes the sandbox runtime. Costs two subprocess spawns, so callers on hot
+/// paths should only probe when an operation has already failed.
+pub async fn probe_availability() -> SandboxAvailability {
+    podman::probe_availability().await
+}
 
 /// Identifies which sandbox backend implementation to use.
 ///
@@ -92,6 +148,36 @@ pub struct SandboxSpec {
     pub shm_size: Option<String>,
     pub cpus: u8,
     pub memory_mib: u32,
+    pub worktree: Option<SandboxWorktree>,
+}
+
+/// The per-session worktree a sandboxed session runs in, when its working
+/// directory was forked from a git repository instead of mounting the user's
+/// live checkout. Recorded so a resumed session can re-attach the worktree and
+/// a deleted session can clean it up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxWorktree {
+    /// The repository's working-tree root, used for git cleanup commands.
+    pub repo_root: PathBuf,
+    /// The worktree root on the host.
+    pub path: PathBuf,
+    /// The session branch (`nac/<key-prefix>`) the worktree has checked out.
+    pub branch: String,
+    /// The commit the branch forked from; compared against at cleanup to tell
+    /// an untouched branch (deleted) from one holding session work (kept).
+    pub fork_point: String,
+}
+
+impl SandboxWorktree {
+    /// Whether the recorded path sits in nac's worktree scratch dir. The path
+    /// comes from the session record, so host-side recursive deletes guard on
+    /// this rather than trusting it blindly.
+    pub(crate) fn path_in_scratch_dir(&self) -> bool {
+        self.path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .is_some_and(|name| name == "worktrees")
+    }
 }
 
 #[derive(Clone)]
@@ -405,6 +491,7 @@ pub fn build_sandbox_spec(
         shm_size,
         cpus,
         memory_mib,
+        worktree: None,
     })
 }
 
@@ -482,6 +569,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn availability_message_combines_problem_and_guidance() {
+        let missing = SandboxAvailability {
+            status: SandboxAvailabilityStatus::Missing,
+            detail: None,
+            guidance: Some("brew install podman".to_string()),
+        };
+        assert!(!missing.available());
+        let message = missing.message();
+        assert!(
+            message.contains("podman is not installed"),
+            "got: {message}"
+        );
+        assert!(message.contains("brew install podman"), "got: {message}");
+
+        let unavailable = SandboxAvailability {
+            status: SandboxAvailabilityStatus::Unavailable,
+            detail: Some("cannot connect to Podman socket".to_string()),
+            guidance: None,
+        };
+        let message = unavailable.message();
+        assert!(
+            message.contains("not responding") && message.contains("cannot connect"),
+            "got: {message}"
+        );
+
+        let ready = SandboxAvailability {
+            status: SandboxAvailabilityStatus::Ready,
+            detail: None,
+            guidance: None,
+        };
+        assert!(ready.available());
+    }
+
+    #[test]
     fn parse_mount_spec_normalizes_relative_host_path() {
         let cwd = std::env::current_dir().unwrap();
         let mount = parse_mount_spec(".:/sandbox/crates", true, &cwd).unwrap();
@@ -507,6 +628,7 @@ mod tests {
             shm_size: Some("0".to_string()),
             cpus: 2,
             memory_mib: 2048,
+            worktree: None,
         });
 
         assert_eq!(session.host_workdir().unwrap(), cwd);
@@ -565,6 +687,7 @@ mod tests {
             shm_size: Some("0".to_string()),
             cpus: 2,
             memory_mib: 2048,
+            worktree: None,
         });
 
         assert_eq!(
@@ -624,6 +747,7 @@ mod tests {
             shm_size: Some("0".to_string()),
             cpus: 2,
             memory_mib: 2048,
+            worktree: None,
         });
 
         assert_eq!(session.host_workdir(), Some(PathBuf::from("/host/vendor")));
@@ -661,6 +785,7 @@ mod tests {
             shm_size: Some("0".to_string()),
             cpus: 2,
             memory_mib: 2048,
+            worktree: None,
         });
 
         let mapped =
@@ -683,6 +808,7 @@ mod tests {
             shm_size: Some("0".to_string()),
             cpus: 2,
             memory_mib: 2048,
+            worktree: None,
         });
         assert_eq!(workdir_session.host_workdir(), None);
         let _ = std::fs::remove_dir_all(root);

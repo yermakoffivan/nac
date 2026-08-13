@@ -20,10 +20,13 @@ use crate::paths::PathContext;
 /// and git targets are created from.
 pub use crate::sandbox::SshConnection;
 use crate::sandbox::{
-    browse_remote_directory, build_sandbox_spec, parse_mount_spec, MountSpec, SandboxBackendType,
-    SandboxSession, DEFAULT_SANDBOX_IMAGE, DEFAULT_SANDBOX_WORKDIR,
+    browse_remote_directory, build_sandbox_spec, parse_mount_spec, session_worktree, MountSpec,
+    SandboxBackendType, SandboxSession, DEFAULT_SANDBOX_IMAGE, DEFAULT_SANDBOX_WORKDIR,
 };
-pub use crate::sandbox::{RemoteBrowseError, RemoteEntry, RemoteListing};
+pub use crate::sandbox::session_worktree::cleanup_session_worktree;
+pub use crate::sandbox::{
+    probe_availability, RemoteBrowseError, RemoteEntry, RemoteListing, SandboxAvailability,
+};
 use crate::sessions::{self, SessionSnapshot};
 use crate::skills::{self, SkillPathVisibility, SkillRegistry};
 use crate::store;
@@ -1355,6 +1358,9 @@ async fn build_resume_config_from_snapshot(
     } else {
         match snapshot.sandbox_spec.clone() {
             Some(spec) => {
+                if let Some(worktree) = &spec.worktree {
+                    session_worktree::restore(worktree)?;
+                }
                 Some(SandboxSession::create(spec, Uuid::new_v4().to_string(), true).await?)
             }
             None => None,
@@ -1500,10 +1506,31 @@ pub async fn build_sandbox_session(
         return Ok(None);
     }
 
+    let owner = options.sandbox_session_key.is_none();
+    let session_key = options
+        .sandbox_session_key
+        .clone()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
     let mut mounts = Vec::new();
+    let mut forked_worktree = None;
     if !options.no_mount_cwd {
+        // Worker subprocesses re-attach with a session key and receive the
+        // owner's mounts; only the owner forks a worktree.
+        let cwd_host = if owner {
+            match session_worktree::fork(cwd, &session_key) {
+                Some(fork) => {
+                    forked_worktree = Some(fork.worktree);
+                    mounts.push(fork.git_dir_mount);
+                    fork.host
+                }
+                None => cwd.to_path_buf(),
+            }
+        } else {
+            cwd.to_path_buf()
+        };
         mounts.push(parse_mount_spec(
-            &format!("{}:{}", cwd.display(), DEFAULT_SANDBOX_WORKDIR),
+            &format!("{}:{}", cwd_host.display(), DEFAULT_SANDBOX_WORKDIR),
             false,
             cwd,
         )?);
@@ -1527,7 +1554,7 @@ pub async fn build_sandbox_session(
         &PathContext::new(cwd),
     )?);
 
-    let spec = build_sandbox_spec(
+    let mut spec = build_sandbox_spec(
         options.sandbox_backend,
         options
             .sandbox_image
@@ -1550,12 +1577,19 @@ pub async fn build_sandbox_session(
         options.sandbox_cpus,
         options.sandbox_mem,
     )?;
-    let owner = options.sandbox_session_key.is_none();
-    let session_key = options
-        .sandbox_session_key
-        .clone()
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let session = SandboxSession::create(spec, session_key, owner).await?;
+    spec.worktree = forked_worktree.clone();
+    let session = match SandboxSession::create(spec, session_key, owner).await {
+        Ok(session) => session,
+        Err(error) => {
+            // The fork predates the session row, so without this rollback a
+            // failed launch (e.g. podman down) would orphan the worktree and
+            // branch.
+            if let Some(worktree) = &forked_worktree {
+                session_worktree::rollback(worktree);
+            }
+            return Err(error);
+        }
+    };
     Ok(Some(session))
 }
 
@@ -3381,6 +3415,7 @@ X-Config = "yes"
                 shm_size: None,
                 cpus: 2,
                 memory_mib: 2048,
+                worktree: None,
             }),
             Some(SshConnection::new("build-box")),
             Vec::new(),

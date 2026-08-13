@@ -47,6 +47,14 @@ export interface StoreInfo {
   worker_executable: string;
 }
 
+export type SandboxAvailabilityStatus = "ready" | "missing" | "unavailable";
+
+export interface SandboxAvailability {
+  status: SandboxAvailabilityStatus;
+  detail: string | null;
+  guidance: string | null;
+}
+
 /**
  * Cost in micro-USD (1e-6 USD), priced from the model catalog when the
  * response was parsed. All-zero means the catalog has no rates for the model,

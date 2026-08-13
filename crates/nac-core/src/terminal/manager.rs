@@ -1112,6 +1112,7 @@ mod tests {
                 shm_size: None,
                 cpus: 2,
                 memory_mib: 2048,
+                worktree: None,
             },
             format!("output-artifacts-test-{}", uuid::Uuid::new_v4()),
             true,

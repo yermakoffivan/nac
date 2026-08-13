@@ -722,6 +722,7 @@ mod tests {
                 shm_size: Some("0".to_string()),
                 cpus: 2,
                 memory_mib: 2048,
+                worktree: None,
             }),
             None,
             vec![
@@ -911,6 +912,12 @@ mod tests {
             shm_size: Some("0".to_string()),
             cpus: 2,
             memory_mib: 2048,
+            worktree: Some(crate::sandbox::SandboxWorktree {
+                repo_root: PathBuf::from("/repo"),
+                path: PathBuf::from("/nac/worktrees/key123"),
+                branch: "nac/key123".to_string(),
+                fork_point: "abc123".to_string(),
+            }),
         });
         create_session(&store_path, &snapshot).unwrap();
 
@@ -918,6 +925,7 @@ mod tests {
         let spec = loaded.sandbox_spec.expect("podman sandbox must survive");
         assert_eq!(spec.backend, SandboxBackendType::Podman);
         assert_eq!(spec.image, "python:3.13-bookworm");
+        assert_eq!(spec.worktree, snapshot.sandbox_spec.unwrap().worktree);
 
         let summaries = list_sessions(&store_path).unwrap();
         assert_eq!(summaries.len(), 1);

@@ -67,6 +67,7 @@ import type {
   SshTarget,
   StoredCredentialList,
   StoreInfo,
+  SandboxAvailability,
   SwitchBranchRequest,
   UpdateConfigRequest,
   UpdateModelConfigurationRequest,
@@ -85,6 +86,7 @@ export const WORKSPACE_STATS_POLL_MS = 30_000;
 
 export const queryKeys = {
   storeInfo: ["store"] as const,
+  sandboxAvailability: ["sandbox-availability"] as const,
   credentials: ["credentials"] as const,
   managedAuth: ["managed-auth"] as const,
   modelConfigs: ["model-configs"] as const,
@@ -154,6 +156,21 @@ export function useStoreInfo() {
     queryKey: queryKeys.storeInfo,
     queryFn: ({ signal }) => api.getStore(signal),
     staleTime: Infinity,
+  });
+}
+
+/**
+ * Whether this host can run sandboxed sessions. Probing spawns podman
+ * subprocesses, so it runs only while a caller asks for it — today that is
+ * the launch form with sandbox mode selected.
+ */
+export function useSandboxAvailability(enabled: boolean) {
+  return useQuery<SandboxAvailability>({
+    queryKey: queryKeys.sandboxAvailability,
+    queryFn: ({ signal }) => api.getSandboxAvailability(signal),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
   });
 }
 

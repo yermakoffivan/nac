@@ -59,6 +59,7 @@ async fn podman_runtime(root: &std::path::Path) -> crate::tools::ToolRuntime {
             shm_size: Some("0".to_string()),
             cpus: 2,
             memory_mib: 512,
+            worktree: None,
         },
         format!("discovery-test-{}", uuid::Uuid::new_v4()),
         true,
@@ -827,6 +828,7 @@ async fn sandbox_discovery_composes_nested_workspace_mounts() {
         shm_size: Some("0".to_string()),
         cpus: 2,
         memory_mib: 2048,
+        worktree: None,
     });
     let mut runtime = crate::tools::test_runtime();
     runtime.backend = Arc::new(crate::sandbox::ExecutionBackend::Sandbox(session));
@@ -931,6 +933,7 @@ async fn podman_and_local_backends_return_identical_discovery_pages() {
             shm_size: Some("0".to_string()),
             cpus: 2,
             memory_mib: 512,
+            worktree: None,
         },
         format!("discovery-unmounted-test-{}", uuid::Uuid::new_v4()),
         true,

@@ -5,13 +5,92 @@ use std::process::{Command as StdCommand, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use portable_pty::CommandBuilder as PtyCommandBuilder;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use super::{MountSpec, SandboxSpec};
+use super::{MountSpec, SandboxAvailability, SandboxAvailabilityStatus, SandboxSpec};
+use crate::workspace::first_stderr_line;
+
+/// Probes whether podman can be used on this host right now: first the binary
+/// (`podman --version`), then the runtime (`podman info`, which fails while a
+/// macOS `podman machine` is stopped or never initialized).
+pub(crate) async fn probe_availability() -> SandboxAvailability {
+    match Command::new("podman").arg("--version").output().await {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            return SandboxAvailability {
+                status: SandboxAvailabilityStatus::Missing,
+                detail: Some(first_stderr_line(&output.stderr)),
+                guidance: Some(install_guidance()),
+            };
+        }
+        Err(error) => {
+            let detail = (error.kind() != std::io::ErrorKind::NotFound).then(|| error.to_string());
+            return SandboxAvailability {
+                status: SandboxAvailabilityStatus::Missing,
+                detail,
+                guidance: Some(install_guidance()),
+            };
+        }
+    }
+    match Command::new("podman").arg("info").output().await {
+        Ok(output) if output.status.success() => SandboxAvailability {
+            status: SandboxAvailabilityStatus::Ready,
+            detail: None,
+            guidance: None,
+        },
+        Ok(output) => SandboxAvailability {
+            status: SandboxAvailabilityStatus::Unavailable,
+            detail: Some(first_stderr_line(&output.stderr)),
+            guidance: Some(start_guidance()),
+        },
+        Err(error) => SandboxAvailability {
+            status: SandboxAvailabilityStatus::Unavailable,
+            detail: Some(error.to_string()),
+            guidance: Some(start_guidance()),
+        },
+    }
+}
+
+/// When a podman operation fails, an availability probe says better than the
+/// raw error whether the runtime is even there; if it probes fine, the
+/// original error is the more specific one and stays.
+async fn explain_runtime_failure(error: anyhow::Error) -> anyhow::Error {
+    let availability = probe_availability().await;
+    if availability.available() {
+        error
+    } else {
+        error.context(availability.message())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn install_guidance() -> String {
+    "brew install podman\npodman machine init\npodman machine start".to_string()
+}
+
+#[cfg(target_os = "linux")]
+fn install_guidance() -> String {
+    "sudo apt install podman    # Debian/Ubuntu\nsudo dnf install podman    # Fedora".to_string()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn install_guidance() -> String {
+    "install podman: https://podman.io/docs/installation".to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn start_guidance() -> String {
+    "podman machine init    # first run only\npodman machine start".to_string()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn start_guidance() -> String {
+    "check 'podman info' on this host for why the runtime is not responding".to_string()
+}
 
 pub(crate) const SANDBOX_EXEC_WRAPPER: &str = r#"pidfile=$2
 if command -v setsid >/dev/null 2>&1; then
@@ -81,7 +160,10 @@ impl PodmanSession {
     }
 
     pub(crate) async fn ensure_ready(&self) -> Result<()> {
-        let exists = self.container_exists().await?;
+        let exists = match self.container_exists().await {
+            Ok(exists) => exists,
+            Err(error) => return Err(explain_runtime_failure(error).await),
+        };
         if !exists {
             if !self.owner {
                 bail!(
@@ -318,11 +400,12 @@ impl PodmanSession {
             .await
             .with_context(|| "failed to execute 'podman run'")?;
         if !output.status.success() {
-            bail!(
+            return Err(explain_runtime_failure(anyhow!(
                 "failed to create sandbox container '{}': {}",
                 self.container_name,
                 String::from_utf8_lossy(&output.stderr).trim()
-            );
+            ))
+            .await);
         }
         Ok(())
     }
@@ -335,11 +418,12 @@ impl PodmanSession {
             .await
             .with_context(|| "failed to execute 'podman start'")?;
         if !output.status.success() {
-            bail!(
+            return Err(explain_runtime_failure(anyhow!(
                 "failed to start sandbox container '{}': {}",
                 self.container_name,
                 String::from_utf8_lossy(&output.stderr).trim()
-            );
+            ))
+            .await);
         }
         Ok(())
     }
@@ -497,6 +581,7 @@ mod tests {
                 shm_size: Some("0".to_string()),
                 cpus: 2,
                 memory_mib: 2048,
+                worktree: None,
             },
             "abc123".to_string(),
             false,
@@ -555,6 +640,7 @@ mod tests {
                 shm_size: Some("0".to_string()),
                 cpus: 2,
                 memory_mib: 2048,
+                worktree: None,
             },
             "empty".to_string(),
             false,
@@ -582,6 +668,7 @@ mod tests {
                 shm_size: Some("8g".to_string()),
                 cpus: 2,
                 memory_mib: 2048,
+                worktree: None,
             },
             "gpu".to_string(),
             false,

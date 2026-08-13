@@ -51,6 +51,7 @@ import type {
   SshTarget,
   StoredCredentialList,
   StoreInfo,
+  SandboxAvailability,
   SubmitPromptResponse,
   SwitchBranchRequest,
   ThreadEventPage,
@@ -174,6 +175,11 @@ export const api = {
 
   getStore: (signal?: AbortSignal) =>
     request<StoreInfo>("GET", "/store", { signal }),
+
+  // Probing spawns podman subprocesses, so callers query this on demand (the
+  // launch form's sandbox mode) rather than on page load.
+  getSandboxAvailability: (signal?: AbortSignal) =>
+    request<SandboxAvailability>("GET", "/sandbox/availability", { signal }),
 
   // Credentials are write-only: the value is sent to the server and never
   // read back, so the UI only ever learns which names have a key stored.
