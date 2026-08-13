@@ -25,7 +25,8 @@ use crate::sandbox::{
 };
 pub use crate::sandbox::session_worktree::cleanup_session_worktree;
 pub use crate::sandbox::{
-    probe_availability, RemoteBrowseError, RemoteEntry, RemoteListing, SandboxAvailability,
+    current_activity, probe_availability, RemoteBrowseError, RemoteEntry, RemoteListing,
+    SandboxActivity, SandboxAvailability,
 };
 use crate::sessions::{self, SessionSnapshot};
 use crate::skills::{self, SkillPathVisibility, SkillRegistry};

@@ -67,6 +67,7 @@ import type {
   SshTarget,
   StoredCredentialList,
   StoreInfo,
+  SandboxActivity,
   SandboxAvailability,
   SwitchBranchRequest,
   UpdateConfigRequest,
@@ -87,6 +88,7 @@ export const WORKSPACE_STATS_POLL_MS = 30_000;
 export const queryKeys = {
   storeInfo: ["store"] as const,
   sandboxAvailability: ["sandbox-availability"] as const,
+  sandboxActivity: ["sandbox-activity"] as const,
   credentials: ["credentials"] as const,
   managedAuth: ["managed-auth"] as const,
   modelConfigs: ["model-configs"] as const,
@@ -170,6 +172,22 @@ export function useSandboxAvailability(enabled: boolean) {
     queryFn: ({ signal }) => api.getSandboxAvailability(signal),
     enabled,
     staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/**
+ * Sandbox setup in progress (image pull, container start), polled while the
+ * launch request is in flight so a minutes-long first pull shows movement
+ * instead of a frozen button.
+ */
+export function useSandboxActivity(enabled: boolean) {
+  return useQuery<SandboxActivity | null>({
+    queryKey: queryKeys.sandboxActivity,
+    queryFn: ({ signal }) => api.getSandboxActivity(signal),
+    enabled,
+    staleTime: 0,
+    refetchInterval: 1000,
     retry: false,
   });
 }

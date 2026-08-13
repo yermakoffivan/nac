@@ -78,6 +78,45 @@ pub async fn probe_availability() -> SandboxAvailability {
     podman::probe_availability().await
 }
 
+/// What sandbox setup is currently doing, for UIs waiting on a launch.
+/// Sandbox creation can take minutes (a first image pull), and without this
+/// the only signal is a hung request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SandboxActivity {
+    pub phase: String,
+    pub since_epoch_ms: u64,
+}
+
+static CURRENT_ACTIVITY: std::sync::RwLock<Option<SandboxActivity>> =
+    std::sync::RwLock::new(None);
+
+/// The sandbox setup in progress right now, if any. The server is local and
+/// launches are rare, so a single slot suffices; concurrent launches simply
+/// overwrite each other's phase.
+pub fn current_activity() -> Option<SandboxActivity> {
+    CURRENT_ACTIVITY.read().ok()?.clone()
+}
+
+pub(crate) fn report_activity(phase: impl Into<String>) {
+    let since_epoch_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    if let Ok(mut current) = CURRENT_ACTIVITY.write() {
+        *current = Some(SandboxActivity {
+            phase: phase.into(),
+            since_epoch_ms,
+        });
+    }
+}
+
+pub(crate) fn clear_activity() {
+    if let Ok(mut current) = CURRENT_ACTIVITY.write() {
+        *current = None;
+    }
+}
+
 /// Identifies which sandbox backend implementation to use.
 ///
 /// Kept as an enum (currently Podman-only) so a future sandbox rework has a
@@ -567,6 +606,22 @@ fn host_path_contains_symlink(root: &Path, relative: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activity_reports_and_clears() {
+        assert_eq!(current_activity(), None);
+        report_activity("pulling image python:3.13-bookworm");
+        let activity = current_activity().expect("activity must be reported");
+        assert!(activity.phase.contains("pulling image"));
+        assert!(activity.since_epoch_ms > 0);
+        report_activity("starting the sandbox container");
+        assert_eq!(
+            current_activity().unwrap().phase,
+            "starting the sandbox container"
+        );
+        clear_activity();
+        assert_eq!(current_activity(), None);
+    }
 
     #[test]
     fn availability_message_combines_problem_and_guidance() {

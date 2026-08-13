@@ -51,6 +51,7 @@ import type {
   SshTarget,
   StoredCredentialList,
   StoreInfo,
+  SandboxActivity,
   SandboxAvailability,
   SubmitPromptResponse,
   SwitchBranchRequest,
@@ -180,6 +181,10 @@ export const api = {
   // launch form's sandbox mode) rather than on page load.
   getSandboxAvailability: (signal?: AbortSignal) =>
     request<SandboxAvailability>("GET", "/sandbox/availability", { signal }),
+
+  // Sandbox setup currently in progress, or null when idle.
+  getSandboxActivity: (signal?: AbortSignal) =>
+    request<SandboxActivity | null>("GET", "/sandbox/activity", { signal }),
 
   // Credentials are write-only: the value is sent to the server and never
   // read back, so the UI only ever learns which names have a key stored.

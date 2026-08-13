@@ -56,6 +56,7 @@ import {
   useCreateModelConfig,
   useCreateSession,
   useModelCatalog,
+  useSandboxActivity,
   useSandboxAvailability,
   useStoreInfo,
   useUpdatePresentation,
@@ -197,6 +198,25 @@ function LaunchForm({
   // A local or sandboxed session has nothing to connect to, so it is ready at once.
   const ready = !isSsh || connected !== null;
   const busy = createSession.isPending || createModelConfig.isPending;
+
+  // A sandboxed launch can spend minutes pulling the image on first run;
+  // the polled phase plus an elapsed timer is the difference between
+  // "working" and "frozen".
+  const sandboxLaunching = createSession.isPending && mode === "sandbox";
+  const sandboxActivity = useSandboxActivity(sandboxLaunching).data;
+  const activitySince = sandboxActivity?.since_epoch_ms;
+  const [launchElapsed, setLaunchElapsed] = useState(0);
+  useEffect(() => {
+    if (!sandboxLaunching) return;
+    const timer = setInterval(() => {
+      setLaunchElapsed(
+        activitySince
+          ? Math.max(0, Math.floor((Date.now() - activitySince) / 1000))
+          : 0,
+      );
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [sandboxLaunching, activitySince]);
 
   // Any edit clears the previous attempt's error, which also re-enables submit.
   const edit =
@@ -775,6 +795,21 @@ function LaunchForm({
               ) : null}
             </div>
           </ConfigurationsPanel>
+        ) : null}
+
+        {sandboxLaunching ? (
+          <div
+            className="flex items-center gap-2"
+            role="status"
+            aria-live="polite"
+          >
+            <span className="text-micro text-basic-primary">
+              {sandboxActivity?.phase ?? "Creating the sandbox…"}
+            </span>
+            <span className="text-micro text-basic-muted">
+              {launchElapsed}s
+            </span>
+          </div>
         ) : null}
       </div>
 

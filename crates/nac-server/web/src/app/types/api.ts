@@ -55,6 +55,11 @@ export interface SandboxAvailability {
   guidance: string | null;
 }
 
+export interface SandboxActivity {
+  phase: string;
+  since_epoch_ms: number;
+}
+
 /**
  * Cost in micro-USD (1e-6 USD), priced from the model catalog when the
  * response was parsed. All-zero means the catalog has no rates for the model,

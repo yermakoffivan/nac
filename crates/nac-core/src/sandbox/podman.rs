@@ -160,6 +160,14 @@ impl PodmanSession {
     }
 
     pub(crate) async fn ensure_ready(&self) -> Result<()> {
+        let result = self.ensure_ready_inner().await;
+        // Whatever happened, setup is no longer in flight; stale activity is
+        // worse than none.
+        super::clear_activity();
+        result
+    }
+
+    async fn ensure_ready_inner(&self) -> Result<()> {
         let exists = match self.container_exists().await {
             Ok(exists) => exists,
             Err(error) => return Err(explain_runtime_failure(error).await),
@@ -171,6 +179,8 @@ impl PodmanSession {
                     self.session_key
                 );
             }
+            self.ensure_image().await?;
+            super::report_activity("starting the sandbox container");
             self.create_container().await?;
             return Ok(());
         }
@@ -179,6 +189,44 @@ impl PodmanSession {
             self.start_container().await?;
         }
 
+        Ok(())
+    }
+
+    /// A first sandbox launch spends nearly all its time here. Pulling
+    /// explicitly — rather than letting `podman run` pull implicitly — is
+    /// what lets the slow phase be reported and streamed instead of looking
+    /// frozen.
+    async fn ensure_image(&self) -> Result<()> {
+        let exists = Command::new("podman")
+            .arg("image")
+            .arg("exists")
+            .arg(&self.spec.image)
+            .output()
+            .await
+            .with_context(|| "failed to execute 'podman image exists'")?;
+        if exists.status.success() {
+            return Ok(());
+        }
+        super::report_activity(format!(
+            "pulling image {} (first run can take several minutes)",
+            self.spec.image
+        ));
+        let status = Command::new("podman")
+            .arg("pull")
+            .arg(&self.spec.image)
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .await
+            .with_context(|| format!("failed to execute 'podman pull {}'", self.spec.image))?;
+        if !status.success() {
+            return Err(explain_runtime_failure(anyhow!(
+                "failed to pull sandbox image '{}'",
+                self.spec.image
+            ))
+            .await);
+        }
         Ok(())
     }
 

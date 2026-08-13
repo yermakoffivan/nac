@@ -2388,6 +2388,7 @@ fn api_router(manager: SessionManager) -> (Router, utoipa::openapi::OpenApi) {
         .routes(routes!(health))
         .routes(routes!(store_info))
         .routes(routes!(sandbox_availability_handler))
+        .routes(routes!(sandbox_activity_handler))
         .routes(routes!(browse_filesystem_handler))
         .routes(routes!(browse_ssh_handler))
         .routes(routes!(provider_models_handler))
@@ -2584,6 +2585,21 @@ async fn store_info(State(manager): State<SessionManager>) -> Json<StoreInfo> {
 )]
 async fn sandbox_availability_handler() -> Json<runtime::SandboxAvailability> {
     Json(runtime::probe_availability().await)
+}
+
+/// Sandbox setup currently in progress (image pull, container start), or
+/// `null` when idle. The launch UI polls this while a sandboxed session is
+/// being created, because a first image pull can take minutes with no other
+/// visible signal.
+#[utoipa::path(
+    get,
+    path = "/sandbox/activity",
+    operation_id = "get_sandbox_activity",
+    tag = "system",
+    responses((status = 200, description = "Success", body = Option<runtime::SandboxActivity>, content_type = "application/json"))
+)]
+async fn sandbox_activity_handler() -> Json<Option<runtime::SandboxActivity>> {
+    Json(runtime::current_activity())
 }
 
 /// The picker starts wherever the caller last was; with no path yet it opens on
@@ -4692,6 +4708,7 @@ mod tests {
         ("GET", "/mcp_library/servers"),
         ("GET", "/model-configs"),
         ("GET", "/models"),
+        ("GET", "/sandbox/activity"),
         ("GET", "/sandbox/availability"),
         ("GET", "/sessions"),
         ("GET", "/sessions/{session_id}"),
